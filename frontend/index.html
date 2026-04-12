@@ -97,6 +97,16 @@
 
   </div>
 
+  <div id="messageModal" class="msg-modal hidden" role="dialog" aria-modal="true" aria-labelledby="messageModalTitle">
+    <div class="msg-modal-card">
+      <div class="msg-modal-header">
+        <h3 id="messageModalTitle">Full Message</h3>
+        <button id="messageModalClose" class="msg-modal-close" type="button">Close</button>
+      </div>
+      <pre id="messageModalContent" class="msg-modal-content"></pre>
+    </div>
+  </div>
+
   <script>
     const AGENTS = ["ceo", "product", "engineer", "marketing", "qa"];
     const AGENT_ROLES = {
@@ -116,7 +126,7 @@
     ];
 
     const states = Object.fromEntries(
-      AGENTS.map((a) => [a, { status: "idle", active: false, inbound: 0, outbound: 0, latest: "No output yet." }])
+      AGENTS.map((a) => [a, { status: "idle", active: false, inbound: 0, outbound: 0, latest: "No output yet.", fullLatest: "No output yet." }])
     );
 
     const progress = {
@@ -152,6 +162,9 @@
     const autoScrollToggleEl = document.getElementById("autoScrollToggle");
     const pauseToggleEl = document.getElementById("pauseToggle");
     const clearFeedBtnEl = document.getElementById("clearFeedBtn");
+    const messageModalEl = document.getElementById("messageModal");
+    const messageModalCloseEl = document.getElementById("messageModalClose");
+    const messageModalContentEl = document.getElementById("messageModalContent");
     const landingViewEl = document.getElementById("landingView");
     const dashboardViewEl = document.getElementById("dashboardView");
     const getStartedBtnEl = document.getElementById("getStartedBtn");
@@ -161,6 +174,7 @@
 
     let eventCount = 0;
     const idleTimers = new Map();
+    const feedMessages = [];
     let ws = null;
     let dashboardShown = false;
 
@@ -176,6 +190,23 @@
     function short(text, max = 180) {
       const value = String(text || "");
       return value.length > max ? `${value.slice(0, max)}...` : value;
+    }
+
+    function openMessageModal(content) {
+      messageModalContentEl.textContent = String(content || "");
+      messageModalEl.classList.remove("hidden");
+    }
+
+    function closeMessageModal() {
+      messageModalEl.classList.add("hidden");
+    }
+
+    function setScrollableCardText(element, fullText, previewLength = 220) {
+      const full = String(fullText || "");
+      element.textContent = short(full, previewLength);
+      element.classList.add("clickable-preview");
+      element.onclick = () => openMessageModal(full);
+      element.title = "Click to view full message";
     }
 
     function passesFilters(from, to, type) {
@@ -220,8 +251,10 @@
             <span>in ${s.inbound}</span>
             <span>out ${s.outbound}</span>
           </div>
-          <div class="output">${s.latest}</div>
+          <div class="output clickable-preview"></div>
         `;
+        const output = card.querySelector(".output");
+        setScrollableCardText(output, s.fullLatest || s.latest, 200);
         cardsEl.appendChild(card);
       });
     }
@@ -257,14 +290,14 @@
         const spec = payload.product_spec;
         const value = short(spec.value_proposition || "n/a", 120);
         const feature = Array.isArray(spec.features) && spec.features.length ? short(spec.features[0].name || "", 40) : "n/a";
-        productCardEl.textContent = `Value: ${value}\nTop feature: ${feature}`;
+        setScrollableCardText(productCardEl, `Value: ${value}\nTop feature: ${feature}`, 170);
       }
 
       if (from === "engineer") {
         const pr = payload.pr_url || "n/a";
         const issue = payload.issue_url || "n/a";
         const branch = payload.branch || "n/a";
-        githubCardEl.textContent = `PR: ${pr}\nIssue: ${issue}\nBranch: ${branch}`;
+        setScrollableCardText(githubCardEl, `PR: ${pr}\nIssue: ${issue}\nBranch: ${branch}`, 170);
       }
 
       if (from === "marketing") {
@@ -272,45 +305,52 @@
         const subject = short(copy.cold_email_subject || "n/a", 120);
         const body = short(copy.cold_email_body || "n/a", 180);
         const tagline = short(copy.tagline || "n/a", 80);
-        emailCardEl.textContent = `Subject: ${subject}\n${body}`;
-        slackCardEl.textContent = `Tagline: ${tagline}\n${short(copy.description || "n/a", 140)}`;
+        setScrollableCardText(emailCardEl, `Subject: ${subject}\n${body}`, 170);
+        setScrollableCardText(slackCardEl, `Tagline: ${tagline}\n${short(copy.description || "n/a", 140)}`, 170);
       }
 
       if (from === "qa" && payload && payload.qa_report) {
         const report = payload.qa_report;
         const issues = Array.isArray(report.issues) ? report.issues.slice(0, 2).map((x) => `- ${short(x, 80)}`).join("\n") : "- n/a";
-        qaCardEl.textContent = `Verdict: ${report.verdict || "unknown"}\n${issues}`;
+        setScrollableCardText(qaCardEl, `Verdict: ${report.verdict || "unknown"}\n${issues}`, 170);
       }
     }
 
-    function appendFeedItem(from, to, type, timestamp, payloadPreview) {
-      const item = document.createElement("div");
-      item.className = "feed-item";
-      item.dataset.from = from;
-      item.dataset.to = to;
-      item.dataset.type = type;
-      item.innerHTML = `
-        <div class="feed-row"><span class="route"><span class="node">${from}</span><span>→</span><span class="node">${to}</span></span><span class="badge ${type}">${type}</span></div>
-        <div class="mono">${timestamp || ""}</div>
-        <div class="mono">${payloadPreview}</div>
-      `;
-      feedEl.prepend(item);
+    function renderFeed() {
+      feedEl.innerHTML = "";
+      for (const itemData of feedMessages) {
+        if (!passesFilters(itemData.from, itemData.to, itemData.type)) {
+          continue;
+        }
+
+        const item = document.createElement("div");
+        item.className = "feed-item";
+        item.dataset.from = itemData.from;
+        item.dataset.to = itemData.to;
+        item.dataset.type = itemData.type;
+        item.innerHTML = `
+          <div class="feed-row"><span class="route"><span class="node">${itemData.from}</span><span>→</span><span class="node">${itemData.to}</span></span><span class="badge ${itemData.type}">${itemData.type}</span></div>
+          <div class="mono">${itemData.timestamp || ""}</div>
+          <div class="mono">${itemData.payloadPreview}</div>
+        `;
+        item.classList.add("clickable-preview");
+        item.onclick = () => {
+          openMessageModal(
+            `From: ${itemData.from}\nTo: ${itemData.to}\nType: ${itemData.type}\nTime: ${itemData.timestamp}\n\nPayload:\n${itemData.fullPayload}`
+          );
+        };
+        feedEl.appendChild(item);
+      }
+
       if (autoScrollToggleEl.checked) {
         feedEl.scrollTop = 0;
       }
-      while (feedEl.children.length > 140) {
-        feedEl.removeChild(feedEl.lastChild);
-      }
+
+      updateStats();
     }
 
     function applyFeedFilters() {
-      feedEl.querySelectorAll(".feed-item").forEach((item) => {
-        const from = item.dataset.from || "";
-        const to = item.dataset.to || "";
-        const type = item.dataset.type || "";
-        item.hidden = !passesFilters(from, to, type);
-      });
-      updateStats();
+      renderFeed();
     }
 
     function handleMessage(msg, appendToFeed = true) {
@@ -319,6 +359,7 @@
       const type = String(msg.message_type || "").toLowerCase();
       const payload = msg.payload ?? {};
       const payloadPreview = previewPayload(payload);
+      const payloadFull = JSON.stringify(payload, null, 2);
 
       if (from === "ceo" && to !== "ceo" && type === "task") progress.ceo_dispatch = true;
       if (type === "revision_request") progress.revisions += 1;
@@ -327,6 +368,7 @@
         states[to].status = "thinking";
         states[to].inbound += 1;
         states[to].latest = `IN ${type}: ${payloadPreview}`;
+        states[to].fullLatest = `IN ${type}:\n${payloadFull}`;
         states[to].active = true;
       }
 
@@ -336,6 +378,7 @@
           states[from].status = "done";
           states[from].active = false;
           states[from].latest = `OUT ${type}: ${payloadPreview}`;
+          states[from].fullLatest = `OUT ${type}:\n${payloadFull}`;
           scheduleIdle(from);
         }
       }
@@ -356,8 +399,18 @@
       updateOutputCards(from, payload);
 
       if (appendToFeed && !pauseToggleEl.checked) {
-        appendFeedItem(from, to, type, msg.timestamp || "", payloadPreview);
-        applyFeedFilters();
+        feedMessages.unshift({
+          from,
+          to,
+          type,
+          timestamp: msg.timestamp || "",
+          payloadPreview,
+          fullPayload: payloadFull,
+        });
+        while (feedMessages.length > 200) {
+          feedMessages.pop();
+        }
+        renderFeed();
       }
 
       eventCount += 1;
@@ -372,11 +425,23 @@
       agentFilterEl.addEventListener("change", applyFeedFilters);
       typeFilterEl.addEventListener("change", applyFeedFilters);
       clearFeedBtnEl.addEventListener("click", () => {
-        feedEl.innerHTML = "";
-        updateStats();
+        feedMessages.length = 0;
+        renderFeed();
       });
       pauseToggleEl.addEventListener("change", () => {
         feedModeEl.textContent = pauseToggleEl.checked ? "paused" : "live stream";
+      });
+
+      messageModalCloseEl.addEventListener("click", closeMessageModal);
+      messageModalEl.addEventListener("click", (event) => {
+        if (event.target === messageModalEl) {
+          closeMessageModal();
+        }
+      });
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") {
+          closeMessageModal();
+        }
       });
     }
 
