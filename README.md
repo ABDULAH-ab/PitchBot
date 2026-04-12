@@ -2,12 +2,6 @@
 
 PitchBot is a multi-agent startup simulator. You provide one startup idea, and five AI agents collaborate to define the product, build a landing page, create marketing assets, and run QA with feedback loops. The system uses live inter-agent messaging and external platform actions so the full pipeline can be demonstrated end-to-end.
 
-## Startup Idea
-
-For this submission, the demo idea is: an AI tool that helps students choose courses faster and with better confidence.
-
-The agents turn this idea into a product spec, implementation PR, launch messaging, and QA review. If QA fails, the CEO agent requests revisions and re-runs the loop.
-
 ## Agent Architecture
 
 ### Agent communication flow
