@@ -1,0 +1,7 @@
+redis
+requests
+python-dotenv
+sendgrid
+fastapi
+uvicorn
+websockets

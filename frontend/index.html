@@ -1,0 +1,474 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PitchBot Live Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <section id="landingView" class="landing-view">
+    <div class="landing-card">
+      <h1>Welcome to PitchBot MAS</h1>
+      <p>
+        PitchBot is a multi-agent startup builder. CEO, Product, Engineer, Marketing,
+        and QA collaborate in real time to plan, build, review, and launch your idea.
+      </p>
+      <button id="getStartedBtn" class="primary-btn" type="button">Get Started</button>
+
+      <form id="ideaForm" class="idea-form hidden" autocomplete="off">
+        <label for="startupIdeaInput">Enter startup idea</label>
+        <textarea id="startupIdeaInput" rows="4" placeholder="Example: AI assistant that helps students choose courses based on goals and workload."></textarea>
+        <button id="startRunBtn" class="primary-btn" type="submit">Start Collaboration</button>
+      </form>
+      <p id="landingStatus" class="landing-status">Connects to backend automatically.</p>
+    </div>
+  </section>
+
+  <div id="dashboardView" class="hidden">
+  <div class="top-strip">
+    <div class="headline">PitchBot Mission Control</div>
+    <div class="top-meta">
+      <span class="pill" id="connectionState">connecting...</span>
+      <span class="pill" id="feedMode">live stream</span>
+      <span class="pill" id="visibleCount">visible 0</span>
+    </div>
+  </div>
+
+  <section class="pipeline-strip">
+    <div class="pipeline-steps" id="pipelineSteps"></div>
+  </section>
+
+  <div class="layout">
+    <section class="panel column" id="leftColumn">
+      <div class="panel-header">Agent Grid <span class="mono" id="eventCount">0 events</span></div>
+      <div id="agentCards"></div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-header">Message Feed <span class="mono">from Redis</span></div>
+      <div class="controls">
+        <select id="agentFilter" aria-label="Filter by agent">
+          <option value="all">all agents</option>
+          <option value="ceo">ceo</option>
+          <option value="product">product</option>
+          <option value="engineer">engineer</option>
+          <option value="marketing">marketing</option>
+          <option value="qa">qa</option>
+        </select>
+        <select id="typeFilter" aria-label="Filter by message type">
+          <option value="all">all types</option>
+          <option value="task">task</option>
+          <option value="result">result</option>
+          <option value="revision_request">revision_request</option>
+          <option value="confirmation">confirmation</option>
+        </select>
+        <label class="mono"><input type="checkbox" id="autoScrollToggle" checked /> auto-scroll</label>
+        <label class="mono"><input type="checkbox" id="pauseToggle" /> pause feed</label>
+        <button id="clearFeedBtn" type="button">clear feed</button>
+      </div>
+      <div class="feed" id="feed"></div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-header">Live Diagnostics <span class="mono">pipeline stats</span></div>
+      <div style="padding: 12px; display: grid; gap: 10px;">
+        <div class="launch-banner" id="launchBanner">Launch completed. QA passed and pipeline reached final stage.</div>
+        <div class="stats-grid">
+          <div class="stat-card"><div class="stat-label">Total Events</div><div class="stat-value" id="totalEvents">0</div></div>
+          <div class="stat-card"><div class="stat-label">Active Agents</div><div class="stat-value" id="activeAgents">0</div></div>
+          <div class="stat-card"><div class="stat-label">QA Verdict</div><div class="stat-value" id="qaVerdict">unknown</div></div>
+        </div>
+        <div class="output" id="latestActivity">No activity yet.</div>
+        <div class="output" id="latestPayload">Payload preview appears here.</div>
+        <div class="card-stack">
+          <article class="live-card product"><h4>Product Spec</h4><p id="productCard">Awaiting product output...</p></article>
+          <article class="live-card github"><h4>GitHub Progress</h4><p id="githubCard">Awaiting engineer output...</p></article>
+          <article class="live-card email"><h4>Email Preview</h4><p id="emailCard">Awaiting marketing output...</p></article>
+          <article class="live-card slack"><h4>Slack Preview</h4><p id="slackCard">Awaiting Slack payload...</p></article>
+          <article class="live-card qa"><h4>QA Report</h4><p id="qaCard">Awaiting QA review...</p></article>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  </div>
+
+  <script>
+    const AGENTS = ["ceo", "product", "engineer", "marketing", "qa"];
+    const AGENT_ROLES = {
+      ceo: "orchestrator",
+      product: "spec planner",
+      engineer: "builder",
+      marketing: "growth",
+      qa: "validator",
+    };
+    const PIPELINE_TITLES = [
+      "Idea Received",
+      "Product Spec",
+      "Engineering",
+      "Marketing",
+      "QA Review",
+      "Launch Complete",
+    ];
+
+    const states = Object.fromEntries(
+      AGENTS.map((a) => [a, { status: "idle", active: false, inbound: 0, outbound: 0, latest: "No output yet." }])
+    );
+
+    const progress = {
+      ceo_dispatch: false,
+      product_done: false,
+      engineer_done: false,
+      marketing_done: false,
+      qa_done: false,
+      qa_pass: false,
+      revisions: 0,
+    };
+
+    const feedEl = document.getElementById("feed");
+    const cardsEl = document.getElementById("agentCards");
+    const latestActivityEl = document.getElementById("latestActivity");
+    const latestPayloadEl = document.getElementById("latestPayload");
+    const eventCountEl = document.getElementById("eventCount");
+    const connectionStateEl = document.getElementById("connectionState");
+    const feedModeEl = document.getElementById("feedMode");
+    const visibleCountEl = document.getElementById("visibleCount");
+    const totalEventsEl = document.getElementById("totalEvents");
+    const activeAgentsEl = document.getElementById("activeAgents");
+    const qaVerdictEl = document.getElementById("qaVerdict");
+    const pipelineStepsEl = document.getElementById("pipelineSteps");
+    const launchBannerEl = document.getElementById("launchBanner");
+    const productCardEl = document.getElementById("productCard");
+    const githubCardEl = document.getElementById("githubCard");
+    const emailCardEl = document.getElementById("emailCard");
+    const slackCardEl = document.getElementById("slackCard");
+    const qaCardEl = document.getElementById("qaCard");
+    const agentFilterEl = document.getElementById("agentFilter");
+    const typeFilterEl = document.getElementById("typeFilter");
+    const autoScrollToggleEl = document.getElementById("autoScrollToggle");
+    const pauseToggleEl = document.getElementById("pauseToggle");
+    const clearFeedBtnEl = document.getElementById("clearFeedBtn");
+    const landingViewEl = document.getElementById("landingView");
+    const dashboardViewEl = document.getElementById("dashboardView");
+    const getStartedBtnEl = document.getElementById("getStartedBtn");
+    const ideaFormEl = document.getElementById("ideaForm");
+    const startupIdeaInputEl = document.getElementById("startupIdeaInput");
+    const landingStatusEl = document.getElementById("landingStatus");
+
+    let eventCount = 0;
+    const idleTimers = new Map();
+    let ws = null;
+    let dashboardShown = false;
+
+    function previewPayload(payload) {
+      try {
+        const text = JSON.stringify(payload);
+        return text.length > 220 ? text.slice(0, 220) + " ..." : text;
+      } catch {
+        return String(payload ?? "");
+      }
+    }
+
+    function short(text, max = 180) {
+      const value = String(text || "");
+      return value.length > max ? `${value.slice(0, max)}...` : value;
+    }
+
+    function passesFilters(from, to, type) {
+      const agentFilter = agentFilterEl.value;
+      const typeFilter = typeFilterEl.value;
+      const matchAgent = agentFilter === "all" || from === agentFilter || to === agentFilter;
+      const matchType = typeFilter === "all" || type === typeFilter;
+      return matchAgent && matchType;
+    }
+
+    function scheduleIdle(agent) {
+      if (idleTimers.has(agent)) {
+        clearTimeout(idleTimers.get(agent));
+      }
+      const timer = setTimeout(() => {
+        if (states[agent].status !== "thinking") {
+          states[agent].status = "idle";
+          states[agent].active = false;
+          renderCards();
+          updateStats();
+        }
+      }, 4500);
+      idleTimers.set(agent, timer);
+    }
+
+    function renderCards() {
+      cardsEl.innerHTML = "";
+      AGENTS.forEach((agent) => {
+        const s = states[agent];
+        const statusClass = s.status === "thinking" ? "thinking" : s.status === "done" ? "done" : "";
+        const card = document.createElement("article");
+        card.className = "agent-card" + (s.active ? " active" : "");
+        card.innerHTML = `
+          <div class="agent-top">
+            <div>
+              <div class="agent-name">${agent}</div>
+              <div class="agent-role">${AGENT_ROLES[agent] || "agent"}</div>
+            </div>
+            <div class="status"><span class="dot ${statusClass}"></span>${s.status}</div>
+          </div>
+          <div class="agent-metrics">
+            <span>in ${s.inbound}</span>
+            <span>out ${s.outbound}</span>
+          </div>
+          <div class="output">${s.latest}</div>
+        `;
+        cardsEl.appendChild(card);
+      });
+    }
+
+    function renderPipelineStepper() {
+      const doneFlags = [
+        progress.ceo_dispatch,
+        progress.product_done,
+        progress.engineer_done,
+        progress.marketing_done,
+        progress.qa_done,
+        progress.qa_pass,
+      ];
+      pipelineStepsEl.innerHTML = "";
+      PIPELINE_TITLES.forEach((title, i) => {
+        const el = document.createElement("div");
+        el.className = `pipe-step${doneFlags[i] ? " done" : ""}`;
+        el.textContent = title;
+        pipelineStepsEl.appendChild(el);
+      });
+    }
+
+    function updateStats() {
+      totalEventsEl.textContent = String(eventCount);
+      activeAgentsEl.textContent = String(AGENTS.filter((a) => states[a].active).length);
+      qaVerdictEl.textContent = progress.qa_pass ? "pass" : (progress.qa_done ? "fail" : "unknown");
+      visibleCountEl.textContent = `visible ${feedEl.querySelectorAll('.feed-item:not([hidden])').length}`;
+      launchBannerEl.classList.toggle("show", progress.qa_pass);
+    }
+
+    function updateOutputCards(from, payload) {
+      if (from === "product" && payload && payload.product_spec) {
+        const spec = payload.product_spec;
+        const value = short(spec.value_proposition || "n/a", 120);
+        const feature = Array.isArray(spec.features) && spec.features.length ? short(spec.features[0].name || "", 40) : "n/a";
+        productCardEl.textContent = `Value: ${value}\nTop feature: ${feature}`;
+      }
+
+      if (from === "engineer") {
+        const pr = payload.pr_url || "n/a";
+        const issue = payload.issue_url || "n/a";
+        const branch = payload.branch || "n/a";
+        githubCardEl.textContent = `PR: ${pr}\nIssue: ${issue}\nBranch: ${branch}`;
+      }
+
+      if (from === "marketing") {
+        const copy = payload.marketing_copy || {};
+        const subject = short(copy.cold_email_subject || "n/a", 120);
+        const body = short(copy.cold_email_body || "n/a", 180);
+        const tagline = short(copy.tagline || "n/a", 80);
+        emailCardEl.textContent = `Subject: ${subject}\n${body}`;
+        slackCardEl.textContent = `Tagline: ${tagline}\n${short(copy.description || "n/a", 140)}`;
+      }
+
+      if (from === "qa" && payload && payload.qa_report) {
+        const report = payload.qa_report;
+        const issues = Array.isArray(report.issues) ? report.issues.slice(0, 2).map((x) => `- ${short(x, 80)}`).join("\n") : "- n/a";
+        qaCardEl.textContent = `Verdict: ${report.verdict || "unknown"}\n${issues}`;
+      }
+    }
+
+    function appendFeedItem(from, to, type, timestamp, payloadPreview) {
+      const item = document.createElement("div");
+      item.className = "feed-item";
+      item.dataset.from = from;
+      item.dataset.to = to;
+      item.dataset.type = type;
+      item.innerHTML = `
+        <div class="feed-row"><span class="route"><span class="node">${from}</span><span>→</span><span class="node">${to}</span></span><span class="badge ${type}">${type}</span></div>
+        <div class="mono">${timestamp || ""}</div>
+        <div class="mono">${payloadPreview}</div>
+      `;
+      feedEl.prepend(item);
+      if (autoScrollToggleEl.checked) {
+        feedEl.scrollTop = 0;
+      }
+      while (feedEl.children.length > 140) {
+        feedEl.removeChild(feedEl.lastChild);
+      }
+    }
+
+    function applyFeedFilters() {
+      feedEl.querySelectorAll(".feed-item").forEach((item) => {
+        const from = item.dataset.from || "";
+        const to = item.dataset.to || "";
+        const type = item.dataset.type || "";
+        item.hidden = !passesFilters(from, to, type);
+      });
+      updateStats();
+    }
+
+    function handleMessage(msg, appendToFeed = true) {
+      const from = String(msg.from_agent || "").toLowerCase();
+      const to = String(msg.to_agent || "").toLowerCase();
+      const type = String(msg.message_type || "").toLowerCase();
+      const payload = msg.payload ?? {};
+      const payloadPreview = previewPayload(payload);
+
+      if (from === "ceo" && to !== "ceo" && type === "task") progress.ceo_dispatch = true;
+      if (type === "revision_request") progress.revisions += 1;
+
+      if (states[to]) {
+        states[to].status = "thinking";
+        states[to].inbound += 1;
+        states[to].latest = `IN ${type}: ${payloadPreview}`;
+        states[to].active = true;
+      }
+
+      if (states[from]) {
+        states[from].outbound += 1;
+        if (type === "result" || type === "confirmation") {
+          states[from].status = "done";
+          states[from].active = false;
+          states[from].latest = `OUT ${type}: ${payloadPreview}`;
+          scheduleIdle(from);
+        }
+      }
+
+      if (from === "product" && type === "result" && to === "ceo") progress.product_done = true;
+      if (from === "engineer" && type === "result" && to === "ceo") progress.engineer_done = true;
+      if (from === "marketing" && type === "result" && to === "ceo") progress.marketing_done = true;
+      if (from === "qa" && type === "result" && to === "ceo") {
+        progress.qa_done = true;
+        if (String(payload?.qa_report?.verdict || "").toLowerCase() === "pass") {
+          progress.qa_pass = true;
+        }
+      }
+      if (to === "qa" && type === "task") progress.qa_pass = false;
+
+      latestActivityEl.textContent = `${msg.timestamp || ""} | ${from} -> ${to} | ${type}`;
+      latestPayloadEl.textContent = payloadPreview;
+      updateOutputCards(from, payload);
+
+      if (appendToFeed && !pauseToggleEl.checked) {
+        appendFeedItem(from, to, type, msg.timestamp || "", payloadPreview);
+        applyFeedFilters();
+      }
+
+      eventCount += 1;
+      eventCountEl.textContent = `${eventCount} events`;
+
+      renderCards();
+      renderPipelineStepper();
+      updateStats();
+    }
+
+    function bindControls() {
+      agentFilterEl.addEventListener("change", applyFeedFilters);
+      typeFilterEl.addEventListener("change", applyFeedFilters);
+      clearFeedBtnEl.addEventListener("click", () => {
+        feedEl.innerHTML = "";
+        updateStats();
+      });
+      pauseToggleEl.addEventListener("change", () => {
+        feedModeEl.textContent = pauseToggleEl.checked ? "paused" : "live stream";
+      });
+    }
+
+    function showDashboard() {
+      if (dashboardShown) {
+        return;
+      }
+      dashboardShown = true;
+      landingViewEl.classList.add("hidden");
+      dashboardViewEl.classList.remove("hidden");
+    }
+
+    function bindLanding() {
+      getStartedBtnEl.addEventListener("click", () => {
+        ideaFormEl.classList.remove("hidden");
+        startupIdeaInputEl.focus();
+      });
+
+      ideaFormEl.addEventListener("submit", (event) => {
+        event.preventDefault();
+        const idea = startupIdeaInputEl.value.trim();
+        if (!idea) {
+          landingStatusEl.textContent = "Please enter a startup idea first.";
+          return;
+        }
+        if (!ws || ws.readyState !== WebSocket.OPEN) {
+          landingStatusEl.textContent = "WebSocket not connected yet. Please wait a moment.";
+          return;
+        }
+        ws.send(JSON.stringify({ action: "start_run", startup_idea: idea }));
+        landingStatusEl.textContent = "Idea submitted. Starting collaboration...";
+        showDashboard();
+      });
+    }
+
+    function connectWebSocket() {
+      const protocol = window.location.protocol === "https:" ? "wss" : "ws";
+      ws = new WebSocket(`${protocol}://${window.location.host}/ws`);
+
+      ws.onopen = () => {
+        connectionStateEl.textContent = "connected";
+        landingStatusEl.textContent = "Connected. Click Get Started to submit your idea.";
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const packet = JSON.parse(event.data);
+          if (packet.kind === "history" && Array.isArray(packet.messages)) {
+            if (packet.messages.length > 0) {
+              showDashboard();
+            }
+            packet.messages.forEach((msg) => handleMessage(msg, true));
+            return;
+          }
+          if (packet.kind === "message" && packet.message) {
+            showDashboard();
+            handleMessage(packet.message, true);
+            return;
+          }
+          if (packet.kind === "system") {
+            const eventName = String(packet.event || "");
+            if (eventName === "start_run_ack") {
+              landingStatusEl.textContent = packet.message || "Request sent.";
+            } else if (eventName === "run_started") {
+              showDashboard();
+            } else if (eventName === "main_output") {
+              latestActivityEl.textContent = `[main] ${packet.line || ""}`;
+            }
+          }
+        } catch {
+          // Ignore malformed packets.
+        }
+      };
+
+      ws.onclose = () => {
+        connectionStateEl.textContent = "reconnecting...";
+        landingStatusEl.textContent = "Connection lost. Reconnecting...";
+        setTimeout(connectWebSocket, 1500);
+      };
+
+      ws.onerror = () => {
+        connectionStateEl.textContent = "connection error";
+        landingStatusEl.textContent = "Connection error. Check server logs.";
+      };
+    }
+
+    renderCards();
+    renderPipelineStepper();
+    updateStats();
+    bindLanding();
+    bindControls();
+    connectWebSocket();
+  </script>
+</body>
+</html>
