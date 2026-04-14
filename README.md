@@ -42,7 +42,7 @@ All messages are structured JSON with: `from_agent`, `to_agent`, `message_type`,
 ### 1. Clone the repository
 
 ```bash
-git clone <YOUR_REPO_URL>
+git clone https://github.com/ABDULAH-ab/PitchBot/tree/main
 cd PitchBot
 ```
 
