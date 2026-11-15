@@ -146,20 +146,4 @@ python main.py
 - FastAPI + WebSockets:
 	- Serves dashboard and streams live agent events to browser
 
-## Slack Workspace Evidence
-
-- Slack workspace invite link:
-	- `https://join.slack.com/t/pitchbotworkspace/shared_invite/zt-3vb5601dc-3X21JWu~cgp17nn5JIgG9g`
-- If invite sharing is restricted, include screenshots in repository under `docs/slack/` and reference them here.
-
-## Engineer Agent GitHub PR
-
-- Example PR created by Engineer agent:
-	- https://github.com/ABDULAH-ab/Startup/pull/10
-
-## Group Members
-
-- Abdullah 22I-1879
-- Yousha Saibi 22L-7482
-
 
